@@ -33,8 +33,8 @@ pipeline {
         stage("Cleanup Old Docker (Safe)") {
             steps {
                 sh '''
-                docker ps -aq | xargs -r docker rm -f
-                docker images -q | xargs -r docker rmi -f
+                docker ps -aq | xargs -r docker rm -f || true
+                docker images -q | xargs -r docker rmi -f || true
                 '''
             }
         }
@@ -50,20 +50,23 @@ pipeline {
             }
         }
 
-        // 🔥 THIS IS THE MISSING PART YOU WANT
-        stage("Run Containers for Verification (TEMP)") {
+        /* 🔥 EXACTLY LIKE YOUR MORNING MANUAL FLOW */
+        stage("Run Containers for Verification (Docker)") {
             steps {
                 sh '''
                 docker network create test-net || true
 
+                echo "Starting MySQL container..."
                 docker run -d --name mysql-test \
                   --network test-net \
                   -e MYSQL_ROOT_PASSWORD=root \
                   -e MYSQL_DATABASE=react_node_app \
-                  authors-books-mysql
+                  mysql:8.0
 
-                sleep 20
+                echo "Waiting for MySQL to be ready..."
+                sleep 30
 
+                echo "Starting Backend container..."
                 docker run -d --name backend-test \
                   --network test-net \
                   -e DB_HOST=mysql-test \
@@ -73,8 +76,14 @@ pipeline {
                   -p 3000:3000 \
                   authors-books-backend
 
-                sleep 10
-                curl -f http://localhost:3000/api || exit 1
+                echo "Waiting for Backend to boot..."
+                sleep 25
+
+                echo "Backend logs:"
+                docker logs backend-test
+
+                echo "Verifying backend API..."
+                curl -f http://localhost:3000/api
                 '''
             }
         }
@@ -82,7 +91,7 @@ pipeline {
         stage("Cleanup Test Containers") {
             steps {
                 sh '''
-                docker rm -f mysql-test backend-test || true
+                docker rm -f backend-test mysql-test || true
                 docker network rm test-net || true
                 '''
             }
@@ -117,7 +126,7 @@ pipeline {
             steps {
                 sh '''
                 kubectl delete namespace $NAMESPACE --ignore-not-found=true
-                sleep 15
+                sleep 20
                 '''
             }
         }
