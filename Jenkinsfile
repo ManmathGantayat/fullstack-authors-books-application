@@ -11,6 +11,8 @@ pipeline {
         BACKEND_IMAGE = "${ECR_REGISTRY}/authors-books-backend:latest"
         FRONTEND_IMAGE = "${ECR_REGISTRY}/authors-books-frontend:latest"
         MYSQL_IMAGE = "${ECR_REGISTRY}/authors-books-mysql:latest"
+
+        EC2_PUBLIC_IP = "54.83.65.67"
     }
 
     stages {
@@ -24,8 +26,8 @@ pipeline {
         stage("Login to ECR") {
             steps {
                 sh '''
-                aws ecr get-login-password --region $AWS_REGION \
-                | docker login --username AWS --password-stdin $ECR_REGISTRY
+                aws ecr get-login-password --region $AWS_REGION |
+                docker login --username AWS --password-stdin $ECR_REGISTRY
                 '''
             }
         }
@@ -33,8 +35,8 @@ pipeline {
         stage("Cleanup Old Docker (Safe)") {
             steps {
                 sh '''
-                docker ps -aq | xargs -r docker rm -f || true
-                docker images -q | xargs -r docker rmi -f || true
+                docker rm -f $(docker ps -aq) 2>/dev/null || true
+                docker network rm test-net 2>/dev/null || true
                 '''
             }
         }
@@ -50,23 +52,21 @@ pipeline {
             }
         }
 
-        /* 🔥 EXACTLY LIKE YOUR MORNING MANUAL FLOW */
-        stage("Run Containers for Verification (Docker)") {
+        stage("Run Docker Containers (Verification)") {
             steps {
                 sh '''
                 docker network create test-net || true
 
-                echo "Starting MySQL container..."
+                echo "Starting MySQL..."
                 docker run -d --name mysql-test \
                   --network test-net \
                   -e MYSQL_ROOT_PASSWORD=root \
                   -e MYSQL_DATABASE=react_node_app \
-                  mysql:8.0
+                  authors-books-mysql
 
-                echo "Waiting for MySQL to be ready..."
                 sleep 30
 
-                echo "Starting Backend container..."
+                echo "Starting Backend..."
                 docker run -d --name backend-test \
                   --network test-net \
                   -e DB_HOST=mysql-test \
@@ -76,22 +76,28 @@ pipeline {
                   -p 3000:3000 \
                   authors-books-backend
 
-                echo "Waiting for Backend to boot..."
-                sleep 25
+                sleep 20
 
-                echo "Backend logs:"
-                docker logs backend-test
+                echo "Starting Frontend..."
+                docker run -d --name frontend-test \
+                  --network test-net \
+                  -p 80:80 \
+                  authors-books-frontend
 
-                echo "Verifying backend API..."
+                sleep 10
+
+                echo "Verifying Backend..."
                 curl -f http://localhost:3000/api
+
+                echo "Docker verification successful"
                 '''
             }
         }
 
-        stage("Cleanup Test Containers") {
+        stage("Cleanup Docker Verification Containers") {
             steps {
                 sh '''
-                docker rm -f backend-test mysql-test || true
+                docker rm -f mysql-test backend-test frontend-test || true
                 docker network rm test-net || true
                 '''
             }
@@ -111,22 +117,11 @@ pipeline {
             }
         }
 
-        stage("Configure kubeconfig (CRITICAL)") {
+        stage("Configure kubeconfig") {
             steps {
                 sh '''
-                aws eks update-kubeconfig \
-                  --region $AWS_REGION \
-                  --name $CLUSTER_NAME
+                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
                 kubectl get nodes
-                '''
-            }
-        }
-
-        stage("Cleanup Kubernetes (Safe)") {
-            steps {
-                sh '''
-                kubectl delete namespace $NAMESPACE --ignore-not-found=true
-                sleep 20
                 '''
             }
         }
