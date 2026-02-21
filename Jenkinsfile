@@ -2,17 +2,16 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = "us-east-1"
-        ACCOUNT_ID = "426192960096"
+        AWS_REGION   = "us-east-1"
+        ACCOUNT_ID   = "426192960096"
         ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
         CLUSTER_NAME = "naresh"
-        NAMESPACE = "authors-books"
+        NAMESPACE    = "authors-books"
 
-        BACKEND_IMAGE = "${ECR_REGISTRY}/authors-books-backend:latest"
+        BACKEND_IMAGE  = "${ECR_REGISTRY}/authors-books-backend:latest"
         FRONTEND_IMAGE = "${ECR_REGISTRY}/authors-books-frontend:latest"
-        MYSQL_IMAGE = "${ECR_REGISTRY}/authors-books-mysql:latest"
-
-        EC2_PUBLIC_IP = "54.83.65.67"
+        MYSQL_IMAGE    = "${ECR_REGISTRY}/authors-books-mysql:latest"
     }
 
     stages {
@@ -26,8 +25,8 @@ pipeline {
         stage("Login to ECR") {
             steps {
                 sh '''
-                aws ecr get-login-password --region $AWS_REGION |
-                docker login --username AWS --password-stdin $ECR_REGISTRY
+                aws ecr get-login-password --region $AWS_REGION \
+                | docker login --username AWS --password-stdin $ECR_REGISTRY
                 '''
             }
         }
@@ -73,10 +72,12 @@ pipeline {
                   -e DB_USER=root \
                   -e DB_PASSWORD=root \
                   -e DB_NAME=react_node_app \
+                  -e PORT=3000 \
                   -p 3000:3000 \
                   authors-books-backend
 
-                sleep 20
+                sleep 25
+                docker logs backend-test
 
                 echo "Starting Frontend..."
                 docker run -d --name frontend-test \
@@ -86,10 +87,10 @@ pipeline {
 
                 sleep 10
 
-                echo "Verifying Backend..."
+                echo "Verifying Backend API..."
                 curl -f http://localhost:3000/api
 
-                echo "Docker verification successful"
+                echo "Docker verification SUCCESS"
                 '''
             }
         }
@@ -106,9 +107,9 @@ pipeline {
         stage("Tag & Push to ECR") {
             steps {
                 sh '''
-                docker tag authors-books-backend $BACKEND_IMAGE
+                docker tag authors-books-backend  $BACKEND_IMAGE
                 docker tag authors-books-frontend $FRONTEND_IMAGE
-                docker tag authors-books-mysql $MYSQL_IMAGE
+                docker tag authors-books-mysql    $MYSQL_IMAGE
 
                 docker push $BACKEND_IMAGE
                 docker push $FRONTEND_IMAGE
@@ -120,7 +121,9 @@ pipeline {
         stage("Configure kubeconfig") {
             steps {
                 sh '''
-                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
+                aws eks update-kubeconfig \
+                  --region $AWS_REGION \
+                  --name $CLUSTER_NAME
                 kubectl get nodes
                 '''
             }
