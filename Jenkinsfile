@@ -27,8 +27,8 @@ pipeline {
         stage("Login to ECR") {
             steps {
                 sh '''
-                aws ecr get-login-password --region $AWS_REGION |
-                docker login --username AWS --password-stdin $ECR_REGISTRY
+                aws ecr get-login-password --region $AWS_REGION \
+                | docker login --username AWS --password-stdin $ECR_REGISTRY
                 '''
             }
         }
@@ -53,47 +53,47 @@ pipeline {
             }
         }
 
-        sstage("Run Docker Containers (EC2 Verification)") {
-    steps {
-        sh '''
-        docker network create test-net || true
+        stage("Run Docker Containers (EC2 Verification)") {
+            steps {
+                sh '''
+                docker network create test-net || true
 
-        echo "▶ Starting MySQL"
-        docker run -d --name mysql-test \
-          --network test-net \
-          -e MYSQL_ROOT_PASSWORD=root \
-          -e MYSQL_DATABASE=react_node_app \
-          authors-books-mysql
+                echo "▶ Starting MySQL"
+                docker run -d --name mysql-test \
+                  --network test-net \
+                  -e MYSQL_ROOT_PASSWORD=root \
+                  -e MYSQL_DATABASE=react_node_app \
+                  authors-books-mysql
 
-        sleep 30
+                sleep 30
 
-        echo "▶ Starting Backend"
-        docker run -d --name backend-test \
-          --network test-net \
-          -e DB_HOST=mysql-test \
-          -e DB_USER=root \
-          -e DB_PASSWORD=root \
-          -e DB_NAME=react_node_app \
-          -p 3000:3000 \
-          authors-books-backend
+                echo "▶ Starting Backend"
+                docker run -d --name backend-test \
+                  --network test-net \
+                  -e DB_HOST=mysql-test \
+                  -e DB_USER=root \
+                  -e DB_PASSWORD=root \
+                  -e DB_NAME=react_node_app \
+                  -p 3000:3000 \
+                  authors-books-backend
 
-        sleep 20
-        docker logs backend-test
+                sleep 20
+                docker logs backend-test
 
-        echo "▶ Verifying backend PORT"
-        curl -s --max-time 5 http://localhost:3000 || true
+                echo "▶ Verifying backend port"
+                curl -s --max-time 5 http://localhost:3000 || true
 
-        echo "▶ Starting Frontend"
-        docker run -d --name frontend-test \
-          --network test-net \
-          -p 80:80 \
-          authors-books-frontend
+                echo "▶ Starting Frontend"
+                docker run -d --name frontend-test \
+                  --network test-net \
+                  -p 80:80 \
+                  authors-books-frontend
 
-        sleep 10
-        echo "✅ Docker verification successful"
-        '''
-    }
-}
+                sleep 10
+                echo "✅ Docker verification successful"
+                '''
+            }
+        }
 
         stage("Tag & Push to ECR") {
             steps {
@@ -121,20 +121,16 @@ pipeline {
         stage("Deploy to Kubernetes") {
             steps {
                 sh '''
-                # Create namespace safely
                 kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
-                # Apply base YAML
                 kubectl apply -f k8s/mysql.yaml -n $NAMESPACE
                 kubectl apply -f k8s/backend.yaml -n $NAMESPACE
                 kubectl apply -f k8s/frontend.yaml -n $NAMESPACE
 
-                # Update images dynamically
                 kubectl set image deployment/mysql mysql=$MYSQL_IMAGE -n $NAMESPACE
                 kubectl set image deployment/backend backend=$BACKEND_IMAGE -n $NAMESPACE
                 kubectl set image deployment/frontend frontend=$FRONTEND_IMAGE -n $NAMESPACE
 
-                # Wait for rollout
                 kubectl rollout status deployment/mysql -n $NAMESPACE
                 kubectl rollout status deployment/backend -n $NAMESPACE
                 kubectl rollout status deployment/frontend -n $NAMESPACE
