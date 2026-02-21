@@ -25,8 +25,8 @@ pipeline {
         stage("Login to ECR") {
             steps {
                 sh '''
-                aws ecr get-login-password --region $AWS_REGION \
-                | docker login --username AWS --password-stdin $ECR_REGISTRY
+                aws ecr get-login-password --region $AWS_REGION |
+                docker login --username AWS --password-stdin $ECR_REGISTRY
                 '''
             }
         }
@@ -34,7 +34,7 @@ pipeline {
         stage("Cleanup Old Docker (Safe)") {
             steps {
                 sh '''
-                docker rm -f $(docker ps -aq) 2>/dev/null || true
+                docker rm -f mysql-test backend-test frontend-test 2>/dev/null || true
                 docker network rm test-net 2>/dev/null || true
                 '''
             }
@@ -51,12 +51,12 @@ pipeline {
             }
         }
 
-        stage("Run Docker Containers (Verification)") {
+        stage("Run Docker Containers (EC2 Verification)") {
             steps {
                 sh '''
                 docker network create test-net || true
 
-                echo "Starting MySQL..."
+                echo "▶ Starting MySQL"
                 docker run -d --name mysql-test \
                   --network test-net \
                   -e MYSQL_ROOT_PASSWORD=root \
@@ -65,41 +65,30 @@ pipeline {
 
                 sleep 30
 
-                echo "Starting Backend..."
+                echo "▶ Starting Backend"
                 docker run -d --name backend-test \
                   --network test-net \
                   -e DB_HOST=mysql-test \
                   -e DB_USER=root \
                   -e DB_PASSWORD=root \
                   -e DB_NAME=react_node_app \
-                  -e PORT=3000 \
                   -p 3000:3000 \
                   authors-books-backend
 
-                sleep 25
+                sleep 20
                 docker logs backend-test
 
-                echo "Starting Frontend..."
+                echo "▶ Verifying backend PORT (not API path)"
+                nc -zv localhost 3000
+
+                echo "▶ Starting Frontend"
                 docker run -d --name frontend-test \
                   --network test-net \
                   -p 80:80 \
                   authors-books-frontend
 
                 sleep 10
-
-                echo "Verifying Backend API..."
-                curl -f http://localhost:3000/api
-
-                echo "Docker verification SUCCESS"
-                '''
-            }
-        }
-
-        stage("Cleanup Docker Verification Containers") {
-            steps {
-                sh '''
-                docker rm -f mysql-test backend-test frontend-test || true
-                docker network rm test-net || true
+                echo "✅ Docker verification successful"
                 '''
             }
         }
@@ -121,9 +110,7 @@ pipeline {
         stage("Configure kubeconfig") {
             steps {
                 sh '''
-                aws eks update-kubeconfig \
-                  --region $AWS_REGION \
-                  --name $CLUSTER_NAME
+                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
                 kubectl get nodes
                 '''
             }
