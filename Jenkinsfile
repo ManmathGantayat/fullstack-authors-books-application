@@ -1,83 +1,98 @@
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    AWS_REGION = "us-east-1"
-    ECR_REGISTRY = "426192960096.dkr.ecr.us-east-1.amazonaws.com"
-    FRONTEND_REPO = "authors-books-frontend"
-    BACKEND_REPO  = "authors-books-backend"
-    MYSQL_REPO    = "authors-books-mysql"
-  }
+    environment {
+        AWS_REGION = "us-east-1"
+        ACCOUNT_ID = "426192960096"
+        ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        CLUSTER_NAME = "naresh"
+        NAMESPACE = "authors-books"
 
-  stages {
-
-    stage('Checkout Code') {
-      steps {
-        checkout scm
-      }
+        BACKEND_IMAGE = "${ECR_REGISTRY}/authors-books-backend:latest"
+        FRONTEND_IMAGE = "${ECR_REGISTRY}/authors-books-frontend:latest"
+        MYSQL_IMAGE = "${ECR_REGISTRY}/authors-books-mysql:latest"
     }
 
-    stage('Login to ECR') {
-      steps {
-        sh '''
-        aws ecr get-login-password --region $AWS_REGION | \
-        docker login --username AWS --password-stdin $ECR_REGISTRY
-        '''
-      }
-    }
+    stages {
 
-    stage('Cleanup Old Docker') {
-      steps {
-        sh '''
-        docker ps -aq | xargs -r docker rm -f
-        docker images -aq | xargs -r docker rmi -f
-        '''
-      }
-    }
+        stage("Checkout Code") {
+            steps {
+                checkout scm
+            }
+        }
 
-    stage('Build Docker Images') {
-      steps {
-        sh '''
-        docker build -t $BACKEND_REPO backend/
-        docker build -t $FRONTEND_REPO frontend/
-        docker pull mysql:8.0
-        docker tag mysql:8.0 $MYSQL_REPO
-        '''
-      }
-    }
+        stage("Login to ECR") {
+            steps {
+                sh '''
+                aws ecr get-login-password --region $AWS_REGION \
+                | docker login --username AWS --password-stdin $ECR_REGISTRY
+                '''
+            }
+        }
 
-    stage('Tag & Push to ECR') {
-      steps {
-        sh '''
-        docker tag $BACKEND_REPO:latest $ECR_REGISTRY/$BACKEND_REPO:latest
-        docker tag $FRONTEND_REPO:latest $ECR_REGISTRY/$FRONTEND_REPO:latest
-        docker tag $MYSQL_REPO:latest $ECR_REGISTRY/$MYSQL_REPO:latest
+        stage("Cleanup Old Docker (Safe)") {
+            steps {
+                sh '''
+                docker ps -aq | xargs -r docker rm -f
+                docker images -q | xargs -r docker rmi -f
+                '''
+            }
+        }
 
-        docker push $ECR_REGISTRY/$BACKEND_REPO:latest
-        docker push $ECR_REGISTRY/$FRONTEND_REPO:latest
-        docker push $ECR_REGISTRY/$MYSQL_REPO:latest
-        '''
-      }
-    }
+        stage("Build Docker Images") {
+            steps {
+                sh '''
+                docker build -t authors-books-backend backend
+                docker build -t authors-books-frontend frontend
+                docker pull mysql:8.0
+                docker tag mysql:8.0 authors-books-mysql
+                '''
+            }
+        }
 
-    stage('Cleanup Kubernetes (Safe)') {
-      steps {
-        sh '''
-        kubectl delete namespace authors-books --ignore-not-found=true
-        sleep 10
-        '''
-      }
-    }
+        stage("Tag & Push to ECR") {
+            steps {
+                sh '''
+                docker tag authors-books-backend $BACKEND_IMAGE
+                docker tag authors-books-frontend $FRONTEND_IMAGE
+                docker tag authors-books-mysql $MYSQL_IMAGE
 
-    stage('Deploy to Kubernetes') {
-      steps {
-        sh '''
-        kubectl apply -f k8s/namespace.yaml
-        kubectl apply -f k8s/mysql.yaml
-        kubectl apply -f k8s/backend.yaml
-        kubectl apply -f k8s/frontend.yaml
-        '''
-      }
+                docker push $BACKEND_IMAGE
+                docker push $FRONTEND_IMAGE
+                docker push $MYSQL_IMAGE
+                '''
+            }
+        }
+
+        stage("Configure kubeconfig (CRITICAL)") {
+            steps {
+                sh '''
+                aws eks update-kubeconfig \
+                  --region $AWS_REGION \
+                  --name $CLUSTER_NAME
+                kubectl get nodes
+                '''
+            }
+        }
+
+        stage("Cleanup Kubernetes (Safe)") {
+            steps {
+                sh '''
+                kubectl delete namespace $NAMESPACE --ignore-not-found=true
+                sleep 15
+                '''
+            }
+        }
+
+        stage("Deploy to Kubernetes") {
+            steps {
+                sh '''
+                kubectl apply -f k8s/namespace.yaml
+                kubectl apply -f k8s/mysql.yaml
+                kubectl apply -f k8s/backend.yaml
+                kubectl apply -f k8s/frontend.yaml
+                '''
+            }
+        }
     }
-  }
 }
