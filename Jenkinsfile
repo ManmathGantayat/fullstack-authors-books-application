@@ -50,6 +50,44 @@ pipeline {
             }
         }
 
+        // 🔥 THIS IS THE MISSING PART YOU WANT
+        stage("Run Containers for Verification (TEMP)") {
+            steps {
+                sh '''
+                docker network create test-net || true
+
+                docker run -d --name mysql-test \
+                  --network test-net \
+                  -e MYSQL_ROOT_PASSWORD=root \
+                  -e MYSQL_DATABASE=react_node_app \
+                  authors-books-mysql
+
+                sleep 20
+
+                docker run -d --name backend-test \
+                  --network test-net \
+                  -e DB_HOST=mysql-test \
+                  -e DB_USER=root \
+                  -e DB_PASSWORD=root \
+                  -e DB_NAME=react_node_app \
+                  -p 3000:3000 \
+                  authors-books-backend
+
+                sleep 10
+                curl -f http://localhost:3000/api || exit 1
+                '''
+            }
+        }
+
+        stage("Cleanup Test Containers") {
+            steps {
+                sh '''
+                docker rm -f mysql-test backend-test || true
+                docker network rm test-net || true
+                '''
+            }
+        }
+
         stage("Tag & Push to ECR") {
             steps {
                 sh '''
