@@ -53,50 +53,47 @@ pipeline {
             }
         }
 
-        stage("Run Docker Containers (EC2 Verification)") {
-            steps {
-                sh '''
-                docker network create test-net || true
+        sstage("Run Docker Containers (EC2 Verification)") {
+    steps {
+        sh '''
+        docker network create test-net || true
 
-                echo "▶ Starting MySQL"
-                docker run -d --name mysql-test \
-                  --network test-net \
-                  -e MYSQL_ROOT_PASSWORD=root \
-                  -e MYSQL_DATABASE=react_node_app \
-                  authors-books-mysql
+        echo "▶ Starting MySQL"
+        docker run -d --name mysql-test \
+          --network test-net \
+          -e MYSQL_ROOT_PASSWORD=root \
+          -e MYSQL_DATABASE=react_node_app \
+          authors-books-mysql
 
-                sleep 30
+        sleep 30
 
-                echo "▶ Starting Backend"
-                docker run -d --name backend-test \
-                  --network test-net \
-                  -e DB_HOST=mysql-test \
-                  -e DB_USER=root \
-                  -e DB_PASSWORD=root \
-                  -e DB_NAME=react_node_app \
-                  -p 3000:3000 \
-                  authors-books-backend
+        echo "▶ Starting Backend"
+        docker run -d --name backend-test \
+          --network test-net \
+          -e DB_HOST=mysql-test \
+          -e DB_USER=root \
+          -e DB_PASSWORD=root \
+          -e DB_NAME=react_node_app \
+          -p 3000:3000 \
+          authors-books-backend
 
-                sleep 20
-                docker logs backend-test
+        sleep 20
+        docker logs backend-test
 
-                nc -zv localhost 3000
+        echo "▶ Verifying backend PORT"
+        curl -s --max-time 5 http://localhost:3000 || true
 
-                echo "▶ Starting Frontend"
-                docker run -d --name frontend-test \
-                  --network test-net \
-                  -p 80:80 \
-                  authors-books-frontend
+        echo "▶ Starting Frontend"
+        docker run -d --name frontend-test \
+          --network test-net \
+          -p 80:80 \
+          authors-books-frontend
 
-                sleep 10
-                echo "✅ Docker verification successful"
-
-                # cleanup test containers
-                docker rm -f mysql-test backend-test frontend-test
-                docker network rm test-net
-                '''
-            }
-        }
+        sleep 10
+        echo "✅ Docker verification successful"
+        '''
+    }
+}
 
         stage("Tag & Push to ECR") {
             steps {
