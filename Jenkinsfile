@@ -6,9 +6,9 @@ pipeline {
         ACCOUNT_ID = "426192960096"
         ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-        BACKEND_ECR  = "${ECR_REGISTRY}/authors-books-backend:latest"
-        FRONTEND_ECR = "${ECR_REGISTRY}/authors-books-frontend:latest"
-        MYSQL_ECR    = "${ECR_REGISTRY}/authors-books-mysql:latest"
+        BACKEND_IMAGE  = "${ECR_REGISTRY}/authors-books-backend:latest"
+        FRONTEND_IMAGE = "${ECR_REGISTRY}/authors-books-frontend:latest"
+        MYSQL_IMAGE    = "${ECR_REGISTRY}/authors-books-mysql:latest"
     }
 
     stages {
@@ -19,75 +19,62 @@ pipeline {
             }
         }
 
-        stage("HARD Docker Reset (Ports + Containers + Images)") {
+        stage("HARD Docker Cleanup (Ports + Containers)") {
             steps {
                 sh '''
-                echo "🔥 Killing processes on ports 80 & 3000"
-                sudo fuser -k 80/tcp || true
-                sudo fuser -k 3000/tcp || true
+                echo "🔥 HARD cleanup"
 
-                echo "🧹 Removing containers"
-                docker rm -f $(docker ps -aq) 2>/dev/null || true
+                docker rm -f frontend backend mysql || true
+                docker network rm authors-net || true
 
-                echo "🧹 Removing images"
-                docker rmi -f $(docker images -aq) 2>/dev/null || true
+                # Kill anything holding ports 3000 or 80
+                fuser -k 3000/tcp || true
+                fuser -k 80/tcp || true
 
-                echo "🧹 Removing networks"
-                docker network prune -f
-
-                echo "🧹 System prune"
-                docker system prune -af
+                docker system prune -af --volumes || true
                 '''
             }
         }
 
-        stage("Login to ECR") {
+        stage("Build Docker Images (Fresh)") {
             steps {
                 sh '''
-                aws ecr get-login-password --region $AWS_REGION \
-                | docker login --username AWS --password-stdin $ECR_REGISTRY
-                '''
-            }
-        }
-
-        stage("Build Docker Images") {
-            steps {
-                sh '''
-                echo "🐳 Build backend"
                 docker build -t authors-books-backend:latest ./backend
-
-                echo "🐳 Build frontend"
                 docker build -t authors-books-frontend:latest ./frontend
 
-                echo "🐳 Prepare MySQL"
                 docker pull mysql:8.0
                 docker tag mysql:8.0 authors-books-mysql:latest
                 '''
             }
         }
 
-        stage("Run Containers (Fresh)") {
+        stage("Run Containers (Fresh & Safe)") {
             steps {
                 sh '''
                 set -e
 
+                echo "🌐 Creating network"
                 docker network create authors-net
 
-                echo "🗄️ MySQL"
+                echo "🗄️ Starting MySQL"
                 docker run -d --name mysql \
                   --network authors-net \
                   -e MYSQL_ROOT_PASSWORD=root \
                   -e MYSQL_DATABASE=react_node_app \
                   -v $(pwd)/backend/db.sql:/docker-entrypoint-initdb.d/db.sql \
+                  --health-cmd="mysqladmin ping -h localhost" \
+                  --health-interval=5s \
+                  --health-retries=20 \
                   authors-books-mysql:latest
 
-                echo "⏳ Waiting for MySQL"
-                for i in {1..40}; do
-                  docker exec mysql mysqladmin ping -h localhost --silent && break
-                  sleep 2
+                echo "⏳ Waiting for MySQL to be healthy"
+                until [ "$(docker inspect -f '{{.State.Health.Status}}' mysql)" = "healthy" ]; do
+                  sleep 5
                 done
 
-                echo "🚀 Backend"
+                echo "✅ MySQL is healthy"
+
+                echo "🚀 Starting Backend"
                 docker run -d --name backend \
                   --network authors-net \
                   -e DB_HOST=mysql \
@@ -98,31 +85,37 @@ pipeline {
                   -p 3000:3000 \
                   authors-books-backend:latest
 
-                sleep 15
+                echo "⏳ Waiting for backend startup"
+                sleep 20
                 docker logs backend
 
-                echo "🌍 Frontend"
+                echo "🧪 Backend API check"
+                curl -f http://localhost:3000/api/books
+
+                echo "🌍 Starting Frontend"
                 docker run -d --name frontend \
                   --network authors-net \
                   -p 80:80 \
                   authors-books-frontend:latest
 
-                echo "🧪 Backend API check"
-                curl -f http://localhost:3000/api/books
+                echo "🎉 Docker deployment SUCCESS"
                 '''
             }
         }
 
-        stage("Push Images to ECR") {
+        stage("Login & Push Images to ECR") {
             steps {
                 sh '''
-                docker tag authors-books-backend:latest  $BACKEND_ECR
-                docker tag authors-books-frontend:latest $FRONTEND_ECR
-                docker tag authors-books-mysql:latest    $MYSQL_ECR
+                aws ecr get-login-password --region $AWS_REGION \
+                | docker login --username AWS --password-stdin $ECR_REGISTRY
 
-                docker push $BACKEND_ECR
-                docker push $FRONTEND_ECR
-                docker push $MYSQL_ECR
+                docker tag authors-books-backend:latest  $BACKEND_IMAGE
+                docker tag authors-books-frontend:latest $FRONTEND_IMAGE
+                docker tag authors-books-mysql:latest    $MYSQL_IMAGE
+
+                docker push $BACKEND_IMAGE
+                docker push $FRONTEND_IMAGE
+                docker push $MYSQL_IMAGE
                 '''
             }
         }
@@ -130,9 +123,9 @@ pipeline {
 
     post {
         success {
-            echo "🎉 DEPLOYMENT SUCCESSFUL"
-            echo "👉 Frontend: http://13.219.99.125"
-            echo "👉 Backend : http://13.219.99.125:3000/api/books"
+            echo "✅ SUCCESS"
+            echo "Frontend: http://13.219.99.125"
+            echo "Backend : http://13.219.99.125:3000/api/books"
         }
         failure {
             echo "❌ FAILED — check logs above"
