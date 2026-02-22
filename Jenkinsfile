@@ -1,18 +1,6 @@
 pipeline {
     agent any
 
-    environment {
-        AWS_REGION   = "us-east-1"
-        ACCOUNT_ID   = "426192960096"
-        ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
-        IMAGE_TAG = "${BUILD_NUMBER}"
-
-        BACKEND_IMAGE  = "${ECR_REGISTRY}/authors-books-backend:${IMAGE_TAG}"
-        FRONTEND_IMAGE = "${ECR_REGISTRY}/authors-books-frontend:${IMAGE_TAG}"
-        MYSQL_IMAGE    = "${ECR_REGISTRY}/authors-books-mysql:${IMAGE_TAG}"
-    }
-
     stages {
 
         stage("Checkout Code") {
@@ -21,20 +9,13 @@ pipeline {
             }
         }
 
-        stage("Login to ECR") {
+        stage("Docker Cleanup (Hard Reset)") {
             steps {
                 sh '''
-                aws ecr get-login-password --region $AWS_REGION \
-                | docker login --username AWS --password-stdin $ECR_REGISTRY
-                '''
-            }
-        }
-
-        stage("Cleanup Old Containers") {
-            steps {
-                sh '''
-                docker rm -f mysql backend frontend 2>/dev/null || true
-                docker network rm authors-net 2>/dev/null || true
+                echo "🧹 Cleaning old containers, networks & ports"
+                docker rm -f frontend backend mysql || true
+                docker network rm authors-net || true
+                docker system prune -af || true
                 '''
             }
         }
@@ -42,9 +23,13 @@ pipeline {
         stage("Build Docker Images") {
             steps {
                 sh '''
+                echo "🐳 Building backend image"
                 docker build -t authors-books-backend:local ./backend
+
+                echo "🐳 Building frontend image"
                 docker build -t authors-books-frontend:local ./frontend
 
+                echo "🐳 Preparing MySQL image"
                 docker pull mysql:8.0
                 docker tag mysql:8.0 authors-books-mysql:local
                 '''
@@ -56,10 +41,10 @@ pipeline {
                 sh '''
                 set -e
 
-                echo "▶ Creating Docker network"
+                echo "🌐 Creating Docker network"
                 docker network create authors-net
 
-                echo "▶ Starting MySQL"
+                echo "🗄️ Starting MySQL"
                 docker run -d --name mysql \
                   --network authors-net \
                   -e MYSQL_ROOT_PASSWORD=root \
@@ -67,16 +52,15 @@ pipeline {
                   -v $(pwd)/backend/db.sql:/docker-entrypoint-initdb.d/db.sql \
                   authors-books-mysql:local
 
-                echo "▶ Waiting for MySQL"
+                echo "⏳ Waiting for MySQL"
                 for i in {1..30}; do
-                  if docker exec mysql mysqladmin ping -h localhost --silent; then
-                    echo "✅ MySQL ready"
-                    break
-                  fi
+                  docker exec mysql mysqladmin ping -h localhost --silent && break
                   sleep 2
                 done
 
-                echo "▶ Starting Backend (EXPOSED on 3000)"
+                echo "✅ MySQL is ready"
+
+                echo "🚀 Starting Backend (exposed on 3000)"
                 docker run -d --name backend \
                   --network authors-net \
                   -e DB_HOST=mysql \
@@ -87,43 +71,33 @@ pipeline {
                   -p 3000:3000 \
                   authors-books-backend:local
 
-                sleep 20
+                echo "⏳ Waiting for Backend"
+                sleep 15
                 docker logs backend
 
-                echo "▶ Backend health check"
+                echo "🧪 Testing Backend API"
                 curl -f http://localhost:3000/api/books || true
 
-                echo "▶ Starting Frontend (EXPOSED on 80)"
+                echo "🌍 Starting Frontend (exposed on 80)"
                 docker run -d --name frontend \
                   --network authors-net \
                   -p 80:80 \
                   authors-books-frontend:local
 
-                echo "✅ Docker-only deployment successful"
-                '''
-            }
-        }
-
-        stage("Tag & Push Images to ECR") {
-            steps {
-                sh '''
-                docker tag authors-books-backend:local  $BACKEND_IMAGE
-                docker tag authors-books-frontend:local $FRONTEND_IMAGE
-                docker tag authors-books-mysql:local    $MYSQL_IMAGE
-
-                docker push $BACKEND_IMAGE
-                docker push $FRONTEND_IMAGE
-                docker push $MYSQL_IMAGE
+                echo "✅ Docker deployment SUCCESSFUL"
                 '''
             }
         }
     }
 
     post {
-        always {
-            sh '''
-            docker system prune -f
-            '''
+        success {
+            echo "🎉 Application is LIVE"
+            echo "👉 Frontend: http://13.219.99.125"
+            echo "👉 Backend : http://13.219.99.125:3000/api/books"
+        }
+        failure {
+            echo "❌ Build failed — check container logs"
         }
     }
 }
