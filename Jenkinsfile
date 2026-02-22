@@ -6,9 +6,11 @@ pipeline {
         ACCOUNT_ID   = "426192960096"
         ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-        BACKEND_IMAGE  = "authors-books-backend:local"
-        FRONTEND_IMAGE = "authors-books-frontend:local"
-        MYSQL_IMAGE    = "authors-books-mysql:local"
+        IMAGE_TAG = "${BUILD_NUMBER}"
+
+        BACKEND_IMAGE  = "${ECR_REGISTRY}/authors-books-backend:${IMAGE_TAG}"
+        FRONTEND_IMAGE = "${ECR_REGISTRY}/authors-books-frontend:${IMAGE_TAG}"
+        MYSQL_IMAGE    = "${ECR_REGISTRY}/authors-books-mysql:${IMAGE_TAG}"
     }
 
     stages {
@@ -16,6 +18,15 @@ pipeline {
         stage("Checkout Code") {
             steps {
                 checkout scm
+            }
+        }
+
+        stage("Login to ECR") {
+            steps {
+                sh '''
+                aws ecr get-login-password --region $AWS_REGION \
+                | docker login --username AWS --password-stdin $ECR_REGISTRY
+                '''
             }
         }
 
@@ -31,13 +42,9 @@ pipeline {
         stage("Build Docker Images") {
             steps {
                 sh '''
-                echo "▶ Building Backend image"
                 docker build -t authors-books-backend:local ./backend
-
-                echo "▶ Building Frontend image"
                 docker build -t authors-books-frontend:local ./frontend
 
-                echo "▶ Preparing MySQL image"
                 docker pull mysql:8.0
                 docker tag mysql:8.0 authors-books-mysql:local
                 '''
@@ -50,7 +57,7 @@ pipeline {
                 set -e
 
                 echo "▶ Creating Docker network"
-                docker network create authors-net || true
+                docker network create authors-net
 
                 echo "▶ Starting MySQL"
                 docker run -d --name mysql \
@@ -60,17 +67,16 @@ pipeline {
                   -v $(pwd)/backend/db.sql:/docker-entrypoint-initdb.d/db.sql \
                   authors-books-mysql:local
 
-                echo "▶ Waiting for MySQL to be ready"
+                echo "▶ Waiting for MySQL"
                 for i in {1..30}; do
-                  if docker exec mysql mysqladmin ping -h "localhost" --silent; then
-                    echo "✅ MySQL is ready"
+                  if docker exec mysql mysqladmin ping -h localhost --silent; then
+                    echo "✅ MySQL ready"
                     break
                   fi
-                  echo "⏳ Waiting for MySQL..."
                   sleep 2
                 done
 
-                echo "▶ Starting Backend (internal network only)"
+                echo "▶ Starting Backend (EXPOSED on 3000)"
                 docker run -d --name backend \
                   --network authors-net \
                   -e DB_HOST=mysql \
@@ -78,16 +84,16 @@ pipeline {
                   -e DB_USER=root \
                   -e DB_PASSWORD=root \
                   -e DB_NAME=react_node_app \
+                  -p 3000:3000 \
                   authors-books-backend:local
 
-                echo "▶ Waiting for Backend"
                 sleep 20
                 docker logs backend
 
-                echo "▶ Verifying Backend internally"
-                docker exec backend curl -f http://localhost:3000/api/books || true
+                echo "▶ Backend health check"
+                curl -f http://localhost:3000/api/books || true
 
-                echo "▶ Starting Frontend"
+                echo "▶ Starting Frontend (EXPOSED on 80)"
                 docker run -d --name frontend \
                   --network authors-net \
                   -p 80:80 \
@@ -97,13 +103,26 @@ pipeline {
                 '''
             }
         }
+
+        stage("Tag & Push Images to ECR") {
+            steps {
+                sh '''
+                docker tag authors-books-backend:local  $BACKEND_IMAGE
+                docker tag authors-books-frontend:local $FRONTEND_IMAGE
+                docker tag authors-books-mysql:local    $MYSQL_IMAGE
+
+                docker push $BACKEND_IMAGE
+                docker push $FRONTEND_IMAGE
+                docker push $MYSQL_IMAGE
+                '''
+            }
+        }
     }
 
     post {
         always {
             sh '''
-            echo "▶ Running containers:"
-            docker ps
+            docker system prune -f
             '''
         }
     }
