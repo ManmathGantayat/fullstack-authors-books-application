@@ -45,10 +45,11 @@ pipeline {
         stage("Build Docker Images") {
             steps {
                 sh '''
-                docker build -t authors-books-backend backend
-                docker build -t authors-books-frontend frontend
+                docker build -t authors-books-backend:local ./backend
+                docker build -t authors-books-frontend:local ./frontend
+
                 docker pull mysql:8.0
-                docker tag mysql:8.0 authors-books-mysql
+                docker tag mysql:8.0 authors-books-mysql:local
                 '''
             }
         }
@@ -58,16 +59,16 @@ pipeline {
                 sh '''
                 docker network create test-net || true
 
-                echo "▶ Starting MySQL"
+                echo "▶ MySQL"
                 docker run -d --name mysql-test \
                   --network test-net \
                   -e MYSQL_ROOT_PASSWORD=root \
                   -e MYSQL_DATABASE=react_node_app \
-                  authors-books-mysql
+                  authors-books-mysql:local
 
-                sleep 30
+                sleep 25
 
-                echo "▶ Starting Backend"
+                echo "▶ Backend"
                 docker run -d --name backend-test \
                   --network test-net \
                   -e DB_HOST=mysql-test \
@@ -75,32 +76,29 @@ pipeline {
                   -e DB_PASSWORD=root \
                   -e DB_NAME=react_node_app \
                   -p 3000:3000 \
-                  authors-books-backend
+                  authors-books-backend:local
 
-                sleep 20
-                docker logs backend-test
+                sleep 15
+                curl -f http://localhost:3000/api || true
 
-                echo "▶ Verifying backend port"
-                curl -s --max-time 5 http://localhost:3000 || true
-
-                echo "▶ Starting Frontend"
+                echo "▶ Frontend"
                 docker run -d --name frontend-test \
                   --network test-net \
                   -p 80:80 \
-                  authors-books-frontend
+                  authors-books-frontend:local
 
                 sleep 10
-                echo "✅ Docker verification successful"
+                echo "✅ Docker verification completed"
                 '''
             }
         }
 
-        stage("Tag & Push to ECR") {
+        stage("Tag & Push Images to ECR") {
             steps {
                 sh '''
-                docker tag authors-books-backend  $BACKEND_IMAGE
-                docker tag authors-books-frontend $FRONTEND_IMAGE
-                docker tag authors-books-mysql    $MYSQL_IMAGE
+                docker tag authors-books-backend:local  $BACKEND_IMAGE
+                docker tag authors-books-frontend:local $FRONTEND_IMAGE
+                docker tag authors-books-mysql:local    $MYSQL_IMAGE
 
                 docker push $BACKEND_IMAGE
                 docker push $FRONTEND_IMAGE
@@ -112,7 +110,9 @@ pipeline {
         stage("Configure kubeconfig") {
             steps {
                 sh '''
-                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
+                aws eks update-kubeconfig \
+                  --region $AWS_REGION \
+                  --name $CLUSTER_NAME
                 kubectl get nodes
                 '''
             }
@@ -121,11 +121,11 @@ pipeline {
         stage("Deploy to Kubernetes") {
             steps {
                 sh '''
-                kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+                kubectl apply -f k8s/namespace.yaml
 
-                kubectl apply -f k8s/mysql.yaml -n $NAMESPACE
-                kubectl apply -f k8s/backend.yaml -n $NAMESPACE
-                kubectl apply -f k8s/frontend.yaml -n $NAMESPACE
+                kubectl apply -f k8s/mysql.yaml
+                kubectl apply -f k8s/backend.yaml
+                kubectl apply -f k8s/frontend.yaml
 
                 kubectl set image deployment/mysql mysql=$MYSQL_IMAGE -n $NAMESPACE
                 kubectl set image deployment/backend backend=$BACKEND_IMAGE -n $NAMESPACE
@@ -141,7 +141,9 @@ pipeline {
 
     post {
         always {
-            sh 'docker system prune -f'
+            sh '''
+            docker system prune -f
+            '''
         }
     }
 }
