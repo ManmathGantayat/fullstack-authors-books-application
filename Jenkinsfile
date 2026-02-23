@@ -1,33 +1,54 @@
 pipeline {
     agent any
 
+    environment {
+        AWS_REGION = "us-east-1"
+        AWS_ACCOUNT_ID = "426192960096"
+        ECR_REGISTRY = "426192960096.dkr.ecr.us-east-1.amazonaws.com"
+
+        FRONTEND_IMAGE = "${ECR_REGISTRY}/authors-books-frontend:latest"
+        BACKEND_IMAGE  = "${ECR_REGISTRY}/authors-books-backend:latest"
+    }
+
     stages {
 
         stage("Checkout Code") {
-            steps { checkout scm }
+            steps {
+                checkout scm
+            }
         }
 
-        stage("Docker Sanity Check") {
+        stage("Docker & Tool Sanity Check") {
             steps {
                 sh '''
                 docker version
                 docker buildx version
                 docker compose version
+                aws --version
+                kubectl version --client
                 '''
             }
         }
 
-        stage("Hard Cleanup") {
+        stage("AUTOMATED HARD CLEANUP (Docker)") {
             steps {
                 sh '''
-                docker compose down -v || true
+                echo "Stopping and removing containers if present..."
                 docker rm -f frontend backend mysql || true
-                docker system prune -af --volumes || true
+
+                echo "Removing project images if present..."
+                docker images | grep authors-books || true
+                docker rmi -f $(docker images | awk '/authors-books/ {print $3}') || true
+
+                echo "Docker system cleanup..."
+                docker network prune -f || true
+                docker volume prune -f || true
+                docker system prune -af || true
                 '''
             }
         }
 
-        stage("Build Images") {
+        stage("Build Images (Fresh)") {
             steps {
                 sh '''
                 docker compose build --no-cache
@@ -35,7 +56,7 @@ pipeline {
             }
         }
 
-        stage("Deploy Application") {
+        stage("Run Containers (Docker Validation)") {
             steps {
                 sh '''
                 docker compose up -d
@@ -47,20 +68,17 @@ pipeline {
         stage("ECR Login") {
             steps {
                 sh '''
-                aws ecr get-login-password --region us-east-1 \
-                | docker login --username AWS --password-stdin 426192960096.dkr.ecr.us-east-1.amazonaws.com
+                aws ecr get-login-password --region $AWS_REGION \
+                | docker login --username AWS --password-stdin $ECR_REGISTRY
                 '''
             }
         }
 
-        stage("Tag Images") {
+        stage("Tag Images for ECR") {
             steps {
                 sh '''
-                docker tag authors-books-frontend:latest \
-                  426192960096.dkr.ecr.us-east-1.amazonaws.com/authors-books-frontend:latest
-
-                docker tag authors-books-backend:latest \
-                  426192960096.dkr.ecr.us-east-1.amazonaws.com/authors-books-backend:latest
+                docker tag authors-books-frontend:latest $FRONTEND_IMAGE
+                docker tag authors-books-backend:latest  $BACKEND_IMAGE
                 '''
             }
         }
@@ -68,17 +86,28 @@ pipeline {
         stage("Push Images to ECR") {
             steps {
                 sh '''
-                docker push 426192960096.dkr.ecr.us-east-1.amazonaws.com/authors-books-frontend:latest
-                docker push 426192960096.dkr.ecr.us-east-1.amazonaws.com/authors-books-backend:latest
+                docker push $FRONTEND_IMAGE
+                docker push $BACKEND_IMAGE
                 '''
             }
         }
 
-        stage("Health Check") {
+        stage("Deploy to Kubernetes") {
             steps {
                 sh '''
-                sleep 20
-                curl -f http://localhost/api/books || true
+                kubectl apply -f k8s/namespace.yaml
+                kubectl apply -f k8s/mysql.yaml
+                kubectl apply -f k8s/backend.yaml
+                kubectl apply -f k8s/frontend.yaml
+                '''
+            }
+        }
+
+        stage("Verify Kubernetes Deployment") {
+            steps {
+                sh '''
+                kubectl get pods -n authors-books
+                kubectl get svc  -n authors-books
                 '''
             }
         }
@@ -86,11 +115,11 @@ pipeline {
 
     post {
         success {
-            echo "🎉 Deployment Successful"
-            echo "🌐 App: http://54.242.243.223"
+            echo "🎉 FULL CI/CD PIPELINE SUCCESSFUL"
+            echo "🚀 Docker → ECR → Kubernetes deployment completed"
         }
         failure {
-            echo "❌ Deployment Failed — check logs"
+            echo "❌ PIPELINE FAILED — check logs"
         }
     }
 }
