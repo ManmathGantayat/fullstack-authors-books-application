@@ -21,8 +21,6 @@ spec:
         env:
         - name: DB_HOST
           value: mysql
-        - name: DB_PORT
-          value: "3306"
         - name: DB_USER
           value: root
         - name: DB_PASSWORD
@@ -36,7 +34,7 @@ metadata:
   name: backend
   namespace: authors-books
 spec:
-  type: ClusterIP        # 🔥 THIS IS THE FIX
+  type: ClusterIP
   selector:
     app: backend
   ports:
