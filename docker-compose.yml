@@ -11,10 +11,11 @@ services:
     volumes:
       - ./backend/db.sql:/docker-entrypoint-initdb.d/db.sql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s
-      timeout: 5s
       retries: 20
+    networks:
+      - authors-net
 
   backend:
     build: ./backend
@@ -29,6 +30,8 @@ services:
       DB_USER: root
       DB_PASSWORD: root
       DB_NAME: react_node_app
+    networks:
+      - authors-net
 
   frontend:
     build: ./frontend
@@ -38,3 +41,9 @@ services:
       - "80:80"
     depends_on:
       - backend
+    networks:
+      - authors-net
+
+networks:
+  authors-net:
+    driver: bridge
