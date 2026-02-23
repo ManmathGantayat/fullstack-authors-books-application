@@ -13,6 +13,20 @@ spec:
       labels:
         app: backend
     spec:
+
+      # ⏳ WAIT FOR MYSQL
+      initContainers:
+      - name: wait-for-mysql
+        image: busybox
+        command:
+          - sh
+          - -c
+          - |
+            until nc -z mysql 3306; do
+              echo "Waiting for MySQL..."
+              sleep 5
+            done
+
       containers:
       - name: backend
         image: 426192960096.dkr.ecr.us-east-1.amazonaws.com/authors-books-backend:latest
