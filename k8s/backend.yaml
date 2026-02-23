@@ -13,6 +13,21 @@ spec:
       labels:
         app: backend
     spec:
+
+      # 🔹 WAIT FOR MYSQL SERVICE
+      initContainers:
+      - name: wait-for-mysql
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          echo "⏳ Waiting for MySQL service..."
+          until nc -z mysql 3306; do
+            sleep 5
+          done
+          echo "✅ MySQL is reachable, starting backend"
+
       containers:
       - name: backend
         image: 426192960096.dkr.ecr.us-east-1.amazonaws.com/authors-books-backend:latest
@@ -29,6 +44,7 @@ spec:
           value: react_node_app
         ports:
         - containerPort: 3000
+
 ---
 apiVersion: v1
 kind: Service
@@ -36,7 +52,7 @@ metadata:
   name: backend
   namespace: authors-books
 spec:
-  type: NodePort        # 👈 ADD THIS
+  type: NodePort
   selector:
     app: backend
   ports:
