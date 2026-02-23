@@ -1,6 +1,12 @@
 pipeline {
     agent any
 
+    environment {
+        AWS_REGION = "us-east-1"
+        ACCOUNT_ID = "426192960096"
+        ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+    }
+
     stages {
 
         stage("Checkout Code") {
@@ -9,12 +15,11 @@ pipeline {
             }
         }
 
-        stage("Docker Sanity Check") {
+        stage("ECR Login") {
             steps {
                 sh '''
-                docker version
-                docker buildx version
-                docker compose version
+                aws ecr get-login-password --region $AWS_REGION \
+                | docker login --username AWS --password-stdin $ECR_REGISTRY
                 '''
             }
         }
@@ -23,35 +28,25 @@ pipeline {
             steps {
                 sh '''
                 docker compose down -v || true
-                docker rm -f frontend backend mysql || true
-                docker network prune -f || true
                 docker system prune -af --volumes || true
                 '''
             }
         }
 
-        stage("Build Images") {
+        stage("Build & Run (Docker Compose)") {
             steps {
                 sh '''
                 docker compose build --no-cache
-                '''
-            }
-        }
-
-        stage("Deploy Application") {
-            steps {
-                sh '''
                 docker compose up -d
-                docker compose ps
                 '''
             }
         }
 
-        stage("Health Check") {
+        stage("Verify") {
             steps {
                 sh '''
-                sleep 20
-                curl -f http://localhost/api/books || true
+                sleep 10
+                curl -f http://localhost/api/books
                 '''
             }
         }
@@ -59,11 +54,12 @@ pipeline {
 
     post {
         success {
-            echo "🎉 Deployment Successful"
-            echo "🌐 Application URL: http://EC2_PUBLIC_IP"
+            echo "🎉 DEPLOYMENT SUCCESS"
+            echo "👉 App: http://<EC2_PUBLIC_IP>"
+            echo "👉 API: http://<EC2_PUBLIC_IP>/api/books"
         }
         failure {
-            echo "❌ Deployment Failed — check docker logs"
+            echo "❌ DEPLOYMENT FAILED"
         }
     }
 }
