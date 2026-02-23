@@ -2,12 +2,13 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = "us-east-1"
+        AWS_REGION     = "us-east-1"
         AWS_ACCOUNT_ID = "426192960096"
-        ECR_REGISTRY = "426192960096.dkr.ecr.us-east-1.amazonaws.com"
+        ECR_REGISTRY   = "426192960096.dkr.ecr.us-east-1.amazonaws.com"
 
         FRONTEND_IMAGE = "${ECR_REGISTRY}/authors-books-frontend:latest"
         BACKEND_IMAGE  = "${ECR_REGISTRY}/authors-books-backend:latest"
+        K8S_NAMESPACE  = "authors-books"
     }
 
     stages {
@@ -30,20 +31,18 @@ pipeline {
             }
         }
 
-        stage("AUTOMATED HARD CLEANUP (Docker)") {
+        stage("AUTOMATED HARD CLEANUP (Docker – SAFE)") {
             steps {
                 sh '''
-                echo "Stopping and removing containers if present..."
+                echo "Stopping containers if present..."
                 docker rm -f frontend backend mysql || true
 
-                echo "Removing project images if present..."
-                docker images | grep authors-books || true
+                echo "Removing project images only..."
                 docker rmi -f $(docker images | awk '/authors-books/ {print $3}') || true
 
-                echo "Docker system cleanup..."
+                echo "Pruning unused networks & volumes (safe)..."
                 docker network prune -f || true
                 docker volume prune -f || true
-                docker system prune -af || true
                 '''
             }
         }
@@ -92,10 +91,18 @@ pipeline {
             }
         }
 
+        stage("Stop Docker Validation Containers") {
+            steps {
+                sh '''
+                docker compose down || true
+                '''
+            }
+        }
+
         stage("Deploy to Kubernetes") {
             steps {
                 sh '''
-                kubectl apply -f k8s/namespace.yaml
+                kubectl apply -f k8s/namespace.yaml || true
                 kubectl apply -f k8s/mysql.yaml
                 kubectl apply -f k8s/backend.yaml
                 kubectl apply -f k8s/frontend.yaml
@@ -106,8 +113,12 @@ pipeline {
         stage("Verify Kubernetes Deployment") {
             steps {
                 sh '''
-                kubectl get pods -n authors-books
-                kubectl get svc  -n authors-books
+                kubectl rollout status deployment/mysql     -n $K8S_NAMESPACE
+                kubectl rollout status deployment/backend   -n $K8S_NAMESPACE
+                kubectl rollout status deployment/frontend  -n $K8S_NAMESPACE
+
+                kubectl get pods -n $K8S_NAMESPACE
+                kubectl get svc  -n $K8S_NAMESPACE
                 '''
             }
         }
